@@ -283,39 +283,24 @@ struct ModuleMap
 
 	Module* GetModule(const char* name)
 	{
-		for (Module& module : modules)
-		{
-			if (module.name == name)
-			{
-				return &module;
-			}
-		}
+		auto it = std::find_if(modules.begin(), modules.end(), [name](const Module& module) { return module.name == name; });
+		if (it != modules.end()) return &*it;
 		return nullptr;
 	}
 
 	Module* GetModule(const std::string& name){
-		for (Module& module : modules)
-		{
-			if (module.name == name)
-			{
-				return &module;
-			}
-		}
+		auto it = std::find_if(modules.begin(), modules.end(), [name](const Module& module) { return module.name == name; });
+		if (it != modules.end()) return &*it;
 		return nullptr;
 	}
 
 	Module* GetModule(uintptr_t address)
 	{
-		for (Module& module : modules)
-		{
-			if (address >= (uintptr_t)module.baseAddress && address <= (uintptr_t)module.baseAddress + module.sections.back().end)
-			{
-				return &module;
-			}
-		}
+		auto it = std::find_if(modules.begin(), modules.end(), [address](const Module& module)
+			{ return address >= (uintptr_t)module.baseAddress && address <= (uintptr_t)module.baseAddress + module.sections.back().end; });
+		if (it != modules.end()) return &*it;
 		return nullptr;
 	}
-
 };
 
 struct MemoryBlock
@@ -837,7 +822,7 @@ public:
 	}
 
 	_Class& Find(uintptr_t VTable){
-		std::pair<uintptr_t, _Class> it = ClassMap.find(VTable);
+		auto it = ClassMap.find(VTable);
 		if (it != ClassMap.end())
 		{
 			return it->second;
