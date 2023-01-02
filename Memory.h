@@ -31,7 +31,7 @@ struct Process
   {
   	this->dwProcessID = dwProcessID;
   	hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, dwProcessID);
-  	if(hProcess = INVALID_HANDLE_VALUE)
+  	if(hProcess == INVALID_HANDLE_VALUE)
 		{
 			std::cout << "Failed to open process" << std::endl;
 		}
@@ -125,12 +125,9 @@ struct Process
 		LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
 		if (fnIsWow64Process != nullptr)
 		{
-			if (!fnIsWow64Process(this->hProcess, &bIsWow64))
-			{
-				return false;
-			}
+			fnIsWow64Process(this->hProcess, &bIsWow64);
+			return bIsWow64;
 		}
-		return true;
 	}
 
 	bool IsSameBits()
@@ -199,6 +196,11 @@ struct MemoryMap
 					mbi.Protect & PAGE_READONLY,
 					mbi.Protect & PAGE_READWRITE));
 			}
+		}
+		if(ranges.size() == 0)
+		{
+			std::cout << "Failed to get memory ranges error code: " << GetLastError() << std::endl;
+			exit(0);
 		}
 	std::cout << "Found " << std::dec << ranges.size() << " memory regions" << std::endl;
 	}
@@ -288,7 +290,8 @@ struct ModuleMap
 		return nullptr;
 	}
 
-	Module* GetModule(const std::string& name){
+	Module* GetModule(const std::string& name)
+	{
 		auto it = std::find_if(modules.begin(), modules.end(), [name](const Module& module) { return module.name == name; });
 		if (it != modules.end()) return &*it;
 		return nullptr;
@@ -770,8 +773,8 @@ struct RTTICompleteObjectLocator
 
 struct RTTITypeDescriptor
 {
-	DWORD pVFTable;
-	DWORD spare;
+	uintptr_t pVFTable;
+	uintptr_t spare;
 	char name;
 };
 
@@ -809,10 +812,12 @@ struct _Class
 class RTTI
 {
 public:
-	RTTI(TargetProcess* process, std::string moduleName){
+	RTTI(TargetProcess* process, std::string moduleName)
+	{
 		this->process = process;
 		module = process->moduleMap.GetModule(moduleName);
 		this->moduleName = moduleName;
+		moduleBase = (uintptr_t)module->baseAddress;
 		FindValidSections();
 		ScanForClasses();
 		if(PotentialClasses.size() > 0)
@@ -856,18 +861,27 @@ public:
 protected:
 	void FindValidSections()
 	{
+		bool bFound1 = false;
+		bool bFound2 = false;
 		// find valid executable or read only sections
 		for (auto& section : module->sections)
 		{
 			if (section.bFlagExecutable)
 			{
 				ExecutableSections.push_back(section);
+				bFound1 = true;
 			}
 			
 			if (section.bFlagReadonly && !section.bFlagExecutable)
 			{
 				ReadOnlySections.push_back(section);
+				bFound2 = true;
 			}
+		}
+
+		if(!bFound1 || !bFound2)
+		{
+			std::cout << "Failed to find valid sections for RTTI scan" << std::endl;
 		}
 	}
 
@@ -929,22 +943,38 @@ protected:
 			RTTICompleteObjectLocator col;
 			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
 
-			if (col.signature != 1 && bUse64bit)
-			{
-				continue;
-			}
-			else if (col.signature != 0 && !bUse64bit)
-			{
-				continue;
-			}
-
 			if(bUse64bit)
 			{
-				//not implemented
-				std::cout << "64bit not implemented" << std::endl;
+				if(col.signature != 1)
+				{
+					continue;
+				}
+
+				uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
+				
+				if(!IsInReadOnlySection(pTypeDescriptor))
+				{
+					continue;
+				}
+
+				RTTITypeDescriptor td;
+				process->Read(pTypeDescriptor, &td, sizeof(RTTITypeDescriptor));
+				
+				if(!IsInReadOnlySection(td.pVFTable))
+				{
+					continue;
+				}
+
+				PotentialClassesFinal.push_back(c);
+
 			}
 			else
 			{
+				if(col.signature != 0)
+				{
+					continue;
+				}
+
 				if(!IsInReadOnlySection(col.pTypeDescriptor))
 				{
 					continue;
@@ -962,7 +992,23 @@ protected:
 		}
 
 		PotentialClasses.clear();
-		SortClasses();
+		if(bUse64bit)
+		{
+			SortClasses64();
+			ProcessClasses64();
+		}
+		else
+		{
+			SortClasses32();
+			ProcessClasses32();
+		}
+
+
+		std::cout << "Found " << Classes.size() << " valid classes in " << moduleName << std::endl;
+	}
+
+	void ProcessClasses32()
+	{
 		for(PotentialClass c : PotentialClassesFinal)
 		{
 			  RTTICompleteObjectLocator col;
@@ -995,7 +1041,46 @@ protected:
 				ClassMap.insert(std::pair<uintptr_t, _Class>(ValidClass.VTable, ValidClass));
 				free(name);
 		}
-		std::cout << "Found " << Classes.size() << " valid classes in " << moduleName << std::endl;
+	}
+
+	void ProcessClasses64()
+	{
+		for(PotentialClass c : PotentialClassesFinal)
+		{
+			  RTTICompleteObjectLocator col;
+				process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+				RTTIClassHierarchyDescriptor chd;
+
+				uintptr_t pClassDescriptor = col.pClassDescriptor + moduleBase;
+				process->Read(pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
+
+				uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
+
+				_Class ValidClass;
+				ValidClass.CompleteObjectLocator = c.CompleteObjectLocator;
+				ValidClass.VTable = c.VTable;
+				char* name = (char*)malloc(256);
+				process->Read(pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, 256);
+				ValidClass.MangledName = name;
+				ValidClass.Name = DemangleMSVC(name);
+				FilterSymbol(ValidClass.Name);
+				ValidClass.offset = col.offset;
+				ValidClass.cdOffset = col.cdOffset;
+
+				ValidClass.bMultipleInheritance  = (chd.attributes >> 0) & 1;
+				ValidClass.bVirtualInheritance  = (chd.attributes >> 1) & 1;
+				ValidClass.bAmbigious  = (chd.attributes >> 2) & 1;
+
+				if(ValidClass.MangledName[3] == 'U')
+				{
+					ValidClass.bStruct = true;
+				}
+
+				EnumerateVirtualFunctions(ValidClass);
+				Classes.push_back(ValidClass);
+				ClassMap.insert(std::pair<uintptr_t, _Class>(ValidClass.VTable, ValidClass));
+				free(name);
+		}
 	}
 
 	void EnumerateVirtualFunctions(_Class c)
@@ -1045,7 +1130,7 @@ protected:
     return std::string(buff);
 	}
 
-	void SortClasses()
+	void SortClasses32()
 	{
 		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
 		{
@@ -1056,6 +1141,27 @@ protected:
 			process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
 			process->Read((uintptr_t)col1.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), aName, 256);
 			process->Read((uintptr_t)col2.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), bName, 256);
+			std::string aNameStr = DemangleMSVC(aName);
+			std::string bNameStr = DemangleMSVC(bName);
+			free(aName);
+			free(bName);
+			return aNameStr < bNameStr;
+		});
+	}
+
+		void SortClasses64()
+	{
+		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
+		{
+			char* aName = (char*)malloc(256);
+			char* bName = (char*)malloc(256);
+			RTTICompleteObjectLocator col1, col2;
+			process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
+			process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
+			uintptr_t pTypeDescriptor1 = (uintptr_t)col1.pTypeDescriptor + moduleBase;
+			uintptr_t pTypeDescriptor2 = (uintptr_t)col2.pTypeDescriptor + moduleBase;
+			process->Read(pTypeDescriptor1 + offsetof(RTTITypeDescriptor, name), aName, 256);
+			process->Read(pTypeDescriptor2 + offsetof(RTTITypeDescriptor, name), bName, 256);
 			std::string aNameStr = DemangleMSVC(aName);
 			std::string bNameStr = DemangleMSVC(bName);
 			free(aName);
@@ -1091,6 +1197,7 @@ protected:
 
 	std::string moduleName;
 	Module* module;
+	uintptr_t moduleBase;
 	TargetProcess* process;
 	std::vector<ModuleSection> ExecutableSections;
 	std::vector<ModuleSection> ReadOnlySections;
