@@ -830,8 +830,8 @@ struct _Class
 	std::vector<uintptr_t> functions;
 
 	DWORD numBaseClasses = 0;
-	std::vector<_ParentClassNode*> Parents;
-	std::vector<_Class*> Interfaces;
+	std::vector<std::shared_ptr<_ParentClassNode>> Parents;
+	std::vector<std::shared_ptr<_Class>> Interfaces;
 
 	bool bMultipleInheritance = false;
 	bool bVirtualInheritance = false;
@@ -849,9 +849,9 @@ struct _ParentClassNode
 	PMD where = { 0,0,0 };
 	DWORD attributes = 0;
 	// lowest child class (the root of the tree)
-	_Class* ChildClass = nullptr;
+	std::shared_ptr<_Class> ChildClass = nullptr;
 	// base class of this class (found by looking for class of the same name)
-	_Class* Class = nullptr;
+	std::shared_ptr<_Class> Class = nullptr;
 	// depth of the class in the tree
 	DWORD treeDepth = 0;
 };
@@ -873,7 +873,7 @@ public:
 		}
 	}
 
-	_Class* Find(uintptr_t VTable)
+	std::shared_ptr<_Class> Find(uintptr_t VTable)
 	{
 		auto it = ClassMap.find(VTable);
 		if (it != ClassMap.end())
@@ -882,7 +882,7 @@ public:
 		}
 	}
 
-	_Class* FindFirst(std::string ClassName)
+	std::shared_ptr<_Class> FindFirst(std::string ClassName)
 	{
 		for (auto& c : Classes)
 		{
@@ -894,9 +894,9 @@ public:
 		return nullptr;
 	}
 
-	std::vector<_Class*> FindAll(std::string ClassName)
+	std::vector<std::shared_ptr<_Class>> FindAll(std::string ClassName)
 	{
-		std::vector<_Class*> classes;
+		std::vector<std::shared_ptr<_Class>> classes;
 		for (auto& c : Classes)
 		{
 			if (c->Name.find(ClassName) != std::string::npos)
@@ -1068,14 +1068,14 @@ protected:
 
 	void ProcessClasses32()
 	{
-		_Class* lastClass = nullptr;
+		std::shared_ptr<_Class> lastClass = nullptr;
 		for (PotentialClass c : PotentialClassesFinal)
 		{
 			RTTICompleteObjectLocator col;
 			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
 			RTTIClassHierarchyDescriptor chd;
 			process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
-			_Class* ValidClass = new _Class();
+			std::shared_ptr<_Class> ValidClass = std::make_shared<_Class>();
 			ValidClass->CompleteObjectLocator = c.CompleteObjectLocator;
 			ValidClass->VTable = c.VTable;
 
@@ -1107,7 +1107,7 @@ protected:
 			}
 			EnumerateVirtualFunctions(ValidClass);
 			Classes.push_back(ValidClass);
-			ClassMap.insert(std::pair<uintptr_t, _Class*>(ValidClass->VTable, ValidClass));
+			ClassMap.insert(std::pair<uintptr_t, std::shared_ptr<_Class>>(ValidClass->VTable, ValidClass));
 
 			if (!ValidClass->bInterface)
 			{
@@ -1122,7 +1122,7 @@ protected:
 		PotentialClassesFinal.shrink_to_fit();
 
 		// process super classes
-		for (_Class* c : Classes)
+		for (std::shared_ptr<_Class> c : Classes)
 		{
 			if (c->numBaseClasses > 1)
 			{
@@ -1142,7 +1142,7 @@ protected:
 				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
 				{
 					RTTIBaseClassDescriptor bcd;
-					_ParentClassNode* node = new _ParentClassNode;
+					std::shared_ptr<_ParentClassNode> node = std::make_shared<_ParentClassNode>();
 					process->Read(baseClassArray[i], &bcd, sizeof(RTTIBaseClassDescriptor));
 
 					// process child name
@@ -1193,7 +1193,7 @@ protected:
 
 			uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
 
-			_Class* ValidClass = new _Class();
+			std::shared_ptr<_Class> ValidClass = std::make_shared<_Class>();
 			ValidClass->CompleteObjectLocator = c.CompleteObjectLocator;
 			ValidClass->VTable = c.VTable;
 			char name[bufferSize];
@@ -1219,13 +1219,13 @@ protected:
 
 			EnumerateVirtualFunctions(ValidClass);
 			Classes.push_back(ValidClass);
-			ClassMap.insert(std::pair<uintptr_t, _Class*>(ValidClass->VTable, ValidClass));
+			ClassMap.insert(std::pair<uintptr_t, std::shared_ptr<_Class>>(ValidClass->VTable, ValidClass));
 		}
 		PotentialClassesFinal.clear();
 		PotentialClassesFinal.shrink_to_fit();
 
 		// process super classes
-		for (_Class* c : Classes)
+		for (std::shared_ptr<_Class> c : Classes)
 		{
 			if (c->numBaseClasses > 1)
 			{
@@ -1253,7 +1253,7 @@ protected:
 				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
 				{
 					RTTIBaseClassDescriptor bcd;
-					_ParentClassNode* node = new _ParentClassNode;
+					std::shared_ptr<_ParentClassNode> node = std::make_shared<_ParentClassNode>();
 					process->Read(baseClasses[i], &bcd, sizeof(RTTIBaseClassDescriptor));
 
 					// process child name
@@ -1291,13 +1291,13 @@ protected:
 		}
 	}
 
-	void EnumerateVirtualFunctions(_Class* c)
+	void EnumerateVirtualFunctions(std::shared_ptr<_Class> c)
 	{
 		constexpr int maxVFuncs = 0x4000;
-		static uintptr_t* buffer = new uintptr_t[maxVFuncs];
-		memset(buffer, 0, sizeof(uintptr_t) * maxVFuncs);
+		auto buffer = std::make_unique<uintptr_t[]>(maxVFuncs);
+		memset(buffer.get(), 0, sizeof(uintptr_t) * maxVFuncs);
 		c->functions.clear();
-		process->Read(c->VTable, buffer, maxVFuncs);
+		process->Read(c->VTable, buffer.get(), maxVFuncs);
 		for (size_t i = 0; i < maxVFuncs / sizeof(uintptr_t); i++)
 		{
 			if (buffer[i] == 0)
@@ -1377,27 +1377,22 @@ protected:
 			});
 	}
 
-	inline static std::vector<std::string> filters =
+	void FilterSymbol(std::string& symbol)
+	{
+	static std::vector<std::string> filters =
 	{
 		"::`vftable'",
 		"const ",
 		"::`anonymous namespace'"
 	};
 
-	void FilterSymbol(std::string& symbol)
-	{
-		for (auto& filter : filters)
+	for (auto& filter : filters)
 		{
-			StringFilter(symbol, filter);
-		}
-	}
-
-	void StringFilter(std::string& string, const std::string& substring)
-	{
-		size_t pos;
-		while ((pos = string.find(substring)) != std::string::npos)
-		{
-			string.erase(pos, substring.length());
+			size_t pos;
+			while ((pos = symbol.find(filter)) != std::string::npos)
+			{
+				symbol.erase(pos, filter.length());
+			}
 		}
 	}
 
@@ -1410,6 +1405,6 @@ protected:
 	std::vector<ModuleSection> ReadOnlySections;
 	std::vector<PotentialClass> PotentialClasses;
 	std::vector<PotentialClass> PotentialClassesFinal;
-	std::vector<_Class*> Classes;
-	std::map<uintptr_t, _Class*> ClassMap;
+	std::vector<std::shared_ptr<_Class>> Classes;
+	std::map<uintptr_t, std::shared_ptr<_Class>> ClassMap;
 };
