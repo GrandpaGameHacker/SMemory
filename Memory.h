@@ -20,40 +20,41 @@
 
 #include <algorithm>
 
+constexpr int bufferSize = 0x1000;
 
 struct Process
 {
 	HANDLE hProcess;
-  DWORD dwProcessID;
-  std::string ProcessName;
+	DWORD dwProcessID;
+	std::string ProcessName;
 
-  Process(DWORD dwProcessID)
-  {
-  	this->dwProcessID = dwProcessID;
-  	hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, dwProcessID);
-  	if(hProcess == INVALID_HANDLE_VALUE)
+	Process(DWORD dwProcessID)
+	{
+		this->dwProcessID = dwProcessID;
+		hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, dwProcessID);
+		if (hProcess == INVALID_HANDLE_VALUE)
 		{
 			std::cout << "Failed to open process" << std::endl;
 		}
-  	CheckBits();
+		CheckBits();
 
-  	char szProcessName[MAX_PATH] = "<unknown>";
-  	GetModuleBaseNameA(hProcess, NULL, szProcessName, sizeof(szProcessName) / sizeof(char));
-  	this->ProcessName = szProcessName;
-  }
+		char szProcessName[MAX_PATH] = "<unknown>";
+		GetModuleBaseNameA(hProcess, NULL, szProcessName, sizeof(szProcessName) / sizeof(char));
+		this->ProcessName = szProcessName;
+	}
 
-  Process(const std::string& ProcessName)
-  {
+	Process(const std::string& ProcessName)
+	{
 		this->dwProcessID = GetProcessID(ProcessName);
 		hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, dwProcessID);
-		if(hProcess == INVALID_HANDLE_VALUE)
+		if (hProcess == INVALID_HANDLE_VALUE)
 		{
 			std::cout << "Failed to open process" << std::endl;
 		}
 		CheckBits();
 		char szProcessName[MAX_PATH] = "<unknown>";
-  	GetModuleBaseNameA(hProcess, NULL, szProcessName, sizeof(szProcessName) / sizeof(char));
-  	this->ProcessName = szProcessName;
+		GetModuleBaseNameA(hProcess, NULL, szProcessName, sizeof(szProcessName) / sizeof(char));
+		this->ProcessName = szProcessName;
 	}
 
 	DWORD GetProcessID(const std::string& ProcessName)
@@ -61,13 +62,13 @@ struct Process
 		PROCESSENTRY32 pe32;
 		pe32.dwSize = sizeof(PROCESSENTRY32);
 		HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-		if(hProcessSnap == INVALID_HANDLE_VALUE)
+		if (hProcessSnap == INVALID_HANDLE_VALUE)
 		{
 			std::cout << "Failed to create snapshot" << std::endl;
 
 			return 0;
 		}
-		if(!Process32First(hProcessSnap, &pe32))
+		if (!Process32First(hProcessSnap, &pe32))
 		{
 			std::cout << "Failed to get first process" << std::endl;
 			CloseHandle(hProcessSnap);
@@ -75,16 +76,16 @@ struct Process
 		}
 		do
 		{
-			if(ProcessName == pe32.szExeFile)
+			if (ProcessName == pe32.szExeFile)
 			{
 				CloseHandle(hProcessSnap);
 				return pe32.th32ProcessID;
 			}
-		}while(Process32Next(hProcessSnap, &pe32));
+		} while (Process32Next(hProcessSnap, &pe32));
 		CloseHandle(hProcessSnap);
 		return 0;
 	}
-    Process(HANDLE hProcess, DWORD dwProcessID, const std::string& ProcessName)
+	Process(HANDLE hProcess, DWORD dwProcessID, const std::string& ProcessName)
 	{
 		this->hProcess = hProcess;
 		this->dwProcessID = dwProcessID;
@@ -121,13 +122,16 @@ struct Process
 	bool Is32Bit()
 	{
 		BOOL bIsWow64 = FALSE;
-		typedef BOOL(WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
+		typedef BOOL(WINAPI* LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
 		LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
 		if (fnIsWow64Process != nullptr)
 		{
 			fnIsWow64Process(this->hProcess, &bIsWow64);
 			return bIsWow64;
 		}
+		std::cout << "Error function IsWow64Process does not exist" << std::endl;
+		exit(0);
+		return false;
 	}
 
 	bool IsSameBits()
@@ -140,7 +144,7 @@ struct Process
 private:
 	void CheckBits()
 	{
-		if(!IsSameBits())
+		if (!IsSameBits())
 		{
 			std::cout << "Process is not the same bits" << std::endl;
 			exit(0);
@@ -151,11 +155,11 @@ private:
 
 struct MemoryRange
 {
-    uintptr_t start;
-    uintptr_t end;
-    bool bExecutable, bReadable, bWritable;
+	uintptr_t start;
+	uintptr_t end;
+	bool bExecutable, bReadable, bWritable;
 
-    MemoryRange(uintptr_t start, uintptr_t end, bool bExecutable, bool bReadable, bool bWritable)
+	MemoryRange(uintptr_t start, uintptr_t end, bool bExecutable, bool bReadable, bool bWritable)
 	{
 		this->start = start;
 		this->end = end;
@@ -190,19 +194,19 @@ struct MemoryMap
 			{
 				ranges.push_back(
 					MemoryRange(
-					(uintptr_t)mbi.BaseAddress,
-					(uintptr_t)mbi.BaseAddress + mbi.RegionSize,
-					mbi.Protect & PAGE_EXECUTE,
-					mbi.Protect & PAGE_READONLY,
-					mbi.Protect & PAGE_READWRITE));
+						(uintptr_t)mbi.BaseAddress,
+						(uintptr_t)mbi.BaseAddress + mbi.RegionSize,
+						mbi.Protect & PAGE_EXECUTE,
+						mbi.Protect & PAGE_READONLY,
+						mbi.Protect & PAGE_READWRITE));
 			}
 		}
-		if(ranges.size() == 0)
+		if (ranges.size() == 0)
 		{
 			std::cout << "Failed to get memory ranges error code: " << GetLastError() << std::endl;
 			exit(0);
 		}
-	std::cout << "Found " << std::dec << ranges.size() << " memory regions" << std::endl;
+		std::cout << "Found " << std::dec << ranges.size() << " memory regions" << std::endl;
 	}
 
 
@@ -300,7 +304,9 @@ struct ModuleMap
 	Module* GetModule(uintptr_t address)
 	{
 		auto it = std::find_if(modules.begin(), modules.end(), [address](const Module& module)
-			{ return address >= (uintptr_t)module.baseAddress && address <= (uintptr_t)module.baseAddress + module.sections.back().end; });
+			{
+				return address >= (uintptr_t)module.baseAddress && address <= (uintptr_t)module.baseAddress + module.sections.back().end;
+			});
 		if (it != modules.end()) return &*it;
 		return nullptr;
 	}
@@ -392,14 +398,14 @@ struct TargetProcess
 			{
 				// get a future using async launch lambda
 				auto future = std::async(std::launch::async, [&range, &process = process]()
-				{
-					MemoryBlock block;
-					block.blockAddress = (void*)range.start;
-					block.blockSize = range.size();
-					block.blockCopy = malloc(block.blockSize);
-					ReadProcessMemory(process.hProcess, block.blockAddress, block.blockCopy, block.blockSize, NULL);
-					return block;
-				});
+					{
+						MemoryBlock block;
+						block.blockAddress = (void*)range.start;
+						block.blockSize = range.size();
+						block.blockCopy = malloc(block.blockSize);
+						ReadProcessMemory(process.hProcess, block.blockAddress, block.blockCopy, block.blockSize, NULL);
+						return block;
+					});
 				futures.push_back(std::move(future));
 			}
 		}
@@ -422,14 +428,14 @@ struct TargetProcess
 			{
 				// get a future using async launch lambda
 				auto future = std::async(std::launch::async, [&range, &process = process]()
-				{
-					MemoryBlock block;
-					block.blockAddress = (void*)range.start;
-					block.blockSize = range.size();
-					block.blockCopy = malloc(block.blockSize);
-					ReadProcessMemory(process.hProcess, block.blockAddress, block.blockCopy, block.blockSize, NULL);
-					return block;
-				});
+					{
+						MemoryBlock block;
+						block.blockAddress = (void*)range.start;
+						block.blockSize = range.size();
+						block.blockCopy = malloc(block.blockSize);
+						ReadProcessMemory(process.hProcess, block.blockAddress, block.blockCopy, block.blockSize, NULL);
+						return block;
+					});
 				futures.push_back(std::move(future));
 			}
 		}
@@ -454,7 +460,7 @@ struct TargetProcess
 
 	void Read(uintptr_t address, void* buffer, size_t size)
 	{
-		if(!ReadProcessMemory(process.hProcess, (void*)address, buffer, size, NULL))
+		if (!ReadProcessMemory(process.hProcess, (void*)address, buffer, size, NULL))
 		{
 			printf("ReadProcessMemory failed: %d\n", GetLastError());
 		}
@@ -463,11 +469,11 @@ struct TargetProcess
 	std::future<void*> AsyncRead(uintptr_t address, size_t size)
 	{
 		return std::async(std::launch::async, [this, address, size]()
-		{
-			void* buffer = malloc(size);
-			ReadProcessMemory(process.hProcess, (void*)address, buffer, size, NULL);
-			return buffer;
-		});
+			{
+				void* buffer = malloc(size);
+				ReadProcessMemory(process.hProcess, (void*)address, buffer, size, NULL);
+				return buffer;
+			});
 	}
 
 	template<typename T>
@@ -482,11 +488,11 @@ struct TargetProcess
 	std::future<T> AsyncRead(uintptr_t address)
 	{
 		return std::async(std::launch::async, [this, address]()
-		{
-			T buffer;
-			ReadProcessMemory(process.hProcess, (void*)address, &buffer, sizeof(T), NULL);
-			return buffer;
-		});
+			{
+				T buffer;
+				ReadProcessMemory(process.hProcess, (void*)address, &buffer, sizeof(T), NULL);
+				return buffer;
+			});
 	}
 
 
@@ -498,9 +504,9 @@ struct TargetProcess
 	void AsyncWrite(uintptr_t address, void* buffer, size_t size)
 	{
 		auto result = std::async(std::launch::async, [this, address, buffer, size]()
-		{
-			WriteProcessMemory(process.hProcess, (void*)address, buffer, size, NULL);
-		});
+			{
+				WriteProcessMemory(process.hProcess, (void*)address, buffer, size, NULL);
+			});
 	}
 
 
@@ -518,6 +524,14 @@ struct TargetProcess
 		WriteProcessMemory(process.hProcess, (LPVOID)RemoteString, dllPath.c_str(), dllPath.size(), NULL);
 		hThread = CreateRemoteThread(process.hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE)LoadLibraryAAddr, (LPVOID)RemoteString, NULL, NULL);
 		return hThread;
+	}
+
+	void InjectDLLAsync(const std::string& dllPath)
+	{
+		auto result = std::async(std::launch::async, [this, dllPath]()
+			{
+				InjectDLL(dllPath);
+			});
 	}
 };
 
@@ -611,7 +625,7 @@ public:
 		this->offsets = offsets;
 	}
 
-		void Setup(TargetProcess* process, uintptr_t address, uintptr_t offset)
+	void Setup(TargetProcess* process, uintptr_t address, uintptr_t offset)
 	{
 		this->process = process;
 		this->address = address;
@@ -629,7 +643,7 @@ public:
 	T Read()
 	{
 		T value;
-		if(offsets.size() > 0)
+		if (offsets.size() > 0)
 		{
 			process->Read(GetAddress(), &value, sizeof(T));
 		}
@@ -714,7 +728,7 @@ public:
 		return CreateRemoteThread(process->process.hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE)address, NULL, NULL, NULL);
 	}
 
-	HANDLE operator()(void *args)
+	HANDLE operator()(void* args)
 	{
 		return CreateRemoteThread(process->process.hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE)address, args, NULL, NULL);
 	}
@@ -742,40 +756,48 @@ private:
 
 struct PMD
 {
-	int mdisp;
-	int pdisp;
-	int vdisp;
+	int mdisp; // member displacement
+	int pdisp; // vbtable displacement
+	int vdisp; // displacement inside vbtable
 };
 
 struct RTTIBaseClassDescriptor
 {
-	PMD pmd;
-	DWORD attributes;
-	DWORD pTypeDescriptor;
+	DWORD pTypeDescriptor; // type descriptor of the class
+	DWORD numContainedBases; // number of nested classes in BaseClassArray
+	PMD where; // pointer to member displacement info
+	DWORD attributes; // flags, usually 0
+};
+
+struct RTTIBaseClassArray
+{
+	// 0x4000 is the maximum number of inheritance allowed in some standards, but it will never exceed that lol ;)
+	// Did this to avoid using C99 Variable Length Arrays, its not in the C++ standard
+	DWORD arrayOfBaseClassDescriptors; // describes base classes for the complete class
 };
 
 struct RTTIClassHierarchyDescriptor
 {
-	DWORD signature;
-	DWORD attributes;
-	DWORD numBaseClasses;
-	DWORD pBaseClassArray;
+	DWORD signature; // 1 if 64 bit, 0 if 32bit
+	DWORD attributes; // bit 0 set = multiple inheritance, bit 1 set = virtual inheritance, bit 2 set = ambiguous
+	DWORD numBaseClasses; // number of classes in the BaseClassArray
+	DWORD pBaseClassArray; // array of base class descriptors
 };
 
 struct RTTICompleteObjectLocator
 {
-	DWORD signature;
-	DWORD offset;
-	DWORD cdOffset;
-	DWORD pTypeDescriptor;
-	DWORD pClassDescriptor;
+	DWORD signature; // 1 if 64 bit, 0 if 32bit
+	DWORD offset; // offset of this vtable in the complete class
+	DWORD cdOffset; // constructor displacement offset
+	DWORD pTypeDescriptor; // type descriptor of the complete class
+	DWORD pClassDescriptor; // class descriptor for the complete class
 };
 
 struct RTTITypeDescriptor
 {
-	uintptr_t pVFTable;
+	uintptr_t pVFTable; // pointer to the vftable
 	uintptr_t spare;
-	char name;
+	char name; // name of the class
 };
 
 
@@ -785,28 +807,45 @@ struct PotentialClass
 	uintptr_t VTable;
 };
 
-struct _ParentClass
-{
-	std::string name;
-	uintptr_t offset;
-};
-
+struct _ParentClassNode;
 struct _Class
 {
 	uintptr_t CompleteObjectLocator;
 	uintptr_t VTable;
+
 	std::string Name;
 	std::string MangledName;
-	DWORD offset;
-	DWORD cdOffset;
-	std::vector<_Class> references;
-	std::vector<_ParentClass> parents;
+
+	DWORD VTableOffset;
+	DWORD ConstructorDisplacementOffset;
+
 	std::vector<uintptr_t> functions;
+
+	DWORD numBaseClasses;
+	std::vector<_ParentClassNode*> Parents;
+	std::vector<_Class*> Interfaces;
+
 	bool bMultipleInheritance = false;
 	bool bVirtualInheritance = false;
 	bool bAmbigious = false;
 	bool bStruct = false;
 	bool bInterface = false;
+};
+
+struct _ParentClassNode
+{
+	// basic class info
+	std::string Name;
+	std::string MangledName;
+	DWORD numContainedBases;
+	PMD where;
+	DWORD attributes;
+	// lowest child class (the root of the tree)
+	_Class* ChildClass;
+	// base class of this class (found by looking for class of the same name)
+	_Class* Class;
+	// depth of the class in the tree
+	DWORD treeDepth;
 };
 
 class RTTI
@@ -820,13 +859,14 @@ public:
 		moduleBase = (uintptr_t)module->baseAddress;
 		FindValidSections();
 		ScanForClasses();
-		if(PotentialClasses.size() > 0)
+		if (PotentialClasses.size() > 0)
 		{
 			ValidateClasses();
 		}
 	}
 
-	_Class& Find(uintptr_t VTable){
+	_Class* Find(uintptr_t VTable)
+	{
 		auto it = ClassMap.find(VTable);
 		if (it != ClassMap.end())
 		{
@@ -834,23 +874,24 @@ public:
 		}
 	}
 
-	_Class& FindFirst(std::string ClassName)
+	_Class* FindFirst(std::string ClassName)
 	{
 		for (auto& c : Classes)
 		{
-			if (c.Name.find(ClassName) != std::string::npos)
+			if (c->Name.find(ClassName) != std::string::npos)
 			{
 				return c;
 			}
 		}
+		return nullptr;
 	}
 
-	std::vector<_Class> FindAll(std::string ClassName)
+	std::vector<_Class*> FindAll(std::string ClassName)
 	{
-		std::vector<_Class> classes;
+		std::vector<_Class*> classes;
 		for (auto& c : Classes)
 		{
-			if (c.Name.find(ClassName) != std::string::npos)
+			if (c->Name.find(ClassName) != std::string::npos)
 			{
 				classes.push_back(c);
 			}
@@ -871,7 +912,7 @@ protected:
 				ExecutableSections.push_back(section);
 				bFound1 = true;
 			}
-			
+
 			if (section.bFlagReadonly && !section.bFlagExecutable)
 			{
 				ReadOnlySections.push_back(section);
@@ -879,13 +920,14 @@ protected:
 			}
 		}
 
-		if(!bFound1 || !bFound2)
+		if (!bFound1 || !bFound2)
 		{
 			std::cout << "Failed to find valid sections for RTTI scan" << std::endl;
 		}
 	}
 
-	bool IsInExecutableSection(uintptr_t address){
+	bool IsInExecutableSection(uintptr_t address)
+	{
 		for (auto& section : ExecutableSections)
 		{
 			if (address >= section.start && address <= section.end)
@@ -896,7 +938,8 @@ protected:
 		return false;
 	}
 
-	bool IsInReadOnlySection(uintptr_t address){
+	bool IsInReadOnlySection(uintptr_t address)
+	{
 		for (auto& section : ReadOnlySections)
 		{
 			if (address >= section.start && address <= section.end)
@@ -910,57 +953,59 @@ protected:
 	void ScanForClasses()
 	{
 		uintptr_t* buffer;
-		for(auto& section : ReadOnlySections)
+		for (auto& section : ReadOnlySections)
 		{
 			buffer = (uintptr_t*)malloc(section.size());
 			process->Read(section.start, buffer, section.size());
-			int max = section.size() / sizeof(uintptr_t);
+			unsigned int max = section.size() / sizeof(uintptr_t);
 			for (size_t i = 0; i < max; i++)
 			{
-				if (buffer[i] == 0 || i+1 > max)
+				if (buffer[i] == 0 || i + 1 > max)
 				{
 					continue;
 				}
 
-				if(IsInReadOnlySection(buffer[i]) && IsInExecutableSection(buffer[i + 1]))
+				if (IsInReadOnlySection(buffer[i]) && IsInExecutableSection(buffer[i + 1]))
 				{
 					PotentialClass c;
 					c.CompleteObjectLocator = buffer[i];
-					c.VTable = buffer[i + 1];
+					c.VTable = section.start + (i + 1) * (sizeof(uintptr_t));
 					PotentialClasses.push_back(c);
 				}
 			}
 			free(buffer);
 		}
 		std::cout << "Found " << PotentialClasses.size() << " potential classes in " << moduleName << std::endl;
+		PotentialClassesFinal.reserve(PotentialClasses.size());
+		Classes.reserve(PotentialClasses.size());
 	}
 
 	void ValidateClasses()
 	{
 		bool bUse64bit = process->Is64Bit();
-		for(PotentialClass c : PotentialClasses)
+		for (PotentialClass c : PotentialClasses)
 		{
 			RTTICompleteObjectLocator col;
 			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
 
-			if(bUse64bit)
+			if (bUse64bit)
 			{
-				if(col.signature != 1)
+				if (col.signature != 1)
 				{
 					continue;
 				}
 
 				uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
-				
-				if(!IsInReadOnlySection(pTypeDescriptor))
+
+				if (!IsInReadOnlySection(pTypeDescriptor))
 				{
 					continue;
 				}
 
 				RTTITypeDescriptor td;
 				process->Read(pTypeDescriptor, &td, sizeof(RTTITypeDescriptor));
-				
-				if(!IsInReadOnlySection(td.pVFTable))
+
+				if (!IsInReadOnlySection(td.pVFTable))
 				{
 					continue;
 				}
@@ -970,19 +1015,19 @@ protected:
 			}
 			else
 			{
-				if(col.signature != 0)
+				if (col.signature != 0)
 				{
 					continue;
 				}
 
-				if(!IsInReadOnlySection(col.pTypeDescriptor))
+				if (!IsInReadOnlySection(col.pTypeDescriptor))
 				{
 					continue;
 				}
 
 				RTTITypeDescriptor td;
 				process->Read(col.pTypeDescriptor, &td, sizeof(RTTITypeDescriptor));
-				if(!IsInReadOnlySection(td.pVFTable))
+				if (!IsInReadOnlySection(td.pVFTable))
 				{
 					continue;
 				}
@@ -992,7 +1037,8 @@ protected:
 		}
 
 		PotentialClasses.clear();
-		if(bUse64bit)
+		PotentialClasses.shrink_to_fit();
+		if (bUse64bit)
 		{
 			SortClasses64();
 			ProcessClasses64();
@@ -1009,95 +1055,180 @@ protected:
 
 	void ProcessClasses32()
 	{
-		for(PotentialClass c : PotentialClassesFinal)
+		_Class* lastClass = nullptr;
+		for (PotentialClass c : PotentialClassesFinal)
 		{
-			  RTTICompleteObjectLocator col;
-				process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+			RTTICompleteObjectLocator col;
+			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+			RTTIClassHierarchyDescriptor chd;
+			process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
+			_Class* ValidClass = new _Class();
+			ValidClass->CompleteObjectLocator = c.CompleteObjectLocator;
+			ValidClass->VTable = c.VTable;
+
+			char name[bufferSize];
+			process->Read((uintptr_t)col.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, bufferSize);
+			ValidClass->MangledName = name;
+			ValidClass->Name = DemangleMSVC(name);
+			FilterSymbol(ValidClass->Name);
+
+			ValidClass->VTableOffset = col.offset;
+			ValidClass->ConstructorDisplacementOffset = col.cdOffset;
+			ValidClass->numBaseClasses = chd.numBaseClasses;
+
+			ValidClass->bMultipleInheritance = (chd.attributes >> 0) & 1;
+			ValidClass->bVirtualInheritance = (chd.attributes >> 1) & 1;
+			ValidClass->bAmbigious = (chd.attributes >> 2) & 1;
+
+			if (lastClass != nullptr)
+			{
+				if (lastClass->Name == ValidClass->Name)
+				{
+					ValidClass->bInterface = true;
+				}
+			}
+
+			if (ValidClass->MangledName[3] == 'U')
+			{
+				ValidClass->bStruct = true;
+			}
+			EnumerateVirtualFunctions(ValidClass);
+			Classes.push_back(ValidClass);
+			ClassMap.insert(std::pair<uintptr_t, _Class*>(ValidClass->VTable, ValidClass));
+
+			if (!ValidClass->bInterface)
+			{
+				lastClass = Classes.back();
+			}
+			else if (lastClass != nullptr)
+			{
+				lastClass->Interfaces.push_back(ValidClass);
+			}
+		}
+		PotentialClassesFinal.clear();
+		PotentialClassesFinal.shrink_to_fit();
+
+		// process super classes
+		for (_Class* c : Classes)
+		{
+			if (c->numBaseClasses > 1)
+			{
+				// read class array (skip the first one)
+				uintptr_t baseClassArray[0x4000];
+
+				RTTICompleteObjectLocator col;
+				process->Read(c->CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+
 				RTTIClassHierarchyDescriptor chd;
 				process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
+				process->Read(chd.pBaseClassArray, baseClassArray, sizeof(uintptr_t) * c->numBaseClasses - 1);
 
-				_Class ValidClass;
-				ValidClass.CompleteObjectLocator = c.CompleteObjectLocator;
-				ValidClass.VTable = c.VTable;
-				char* name = (char*)malloc(256);
-				process->Read((uintptr_t)col.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, 256);
-				ValidClass.MangledName = name;
-				ValidClass.Name = DemangleMSVC(name);
-				FilterSymbol(ValidClass.Name);
-				ValidClass.offset = col.offset;
-				ValidClass.cdOffset = col.cdOffset;
+				DWORD lastdisplacement = 0;
+				DWORD depth = 0;
 
-				ValidClass.bMultipleInheritance  = (chd.attributes >> 0) & 1;
-				ValidClass.bVirtualInheritance  = (chd.attributes >> 1) & 1;
-				ValidClass.bAmbigious  = (chd.attributes >> 2) & 1;
-
-				if(ValidClass.MangledName[3] == 'U')
+				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
 				{
-					ValidClass.bStruct = true;
-				}
+					RTTIBaseClassDescriptor bcd;
+					_ParentClassNode* node = new _ParentClassNode;
+					process->Read(baseClassArray[i], &bcd, sizeof(RTTIBaseClassDescriptor));
 
-				EnumerateVirtualFunctions(ValidClass);
-				Classes.push_back(ValidClass);
-				ClassMap.insert(std::pair<uintptr_t, _Class>(ValidClass.VTable, ValidClass));
-				free(name);
+					// process child name
+					char name[bufferSize];
+					process->Read((uintptr_t)bcd.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, bufferSize);
+					name[bufferSize - 1] = 0;
+					node->MangledName = name;
+					node->Name = DemangleMSVC(name);
+					node->attributes = bcd.attributes;
+					FilterSymbol(node->Name);
+
+					node->ChildClass = c;
+					node->Class = FindFirst(node->Name);
+					node->numContainedBases = bcd.numContainedBases;
+					node->where = bcd.where;
+
+					if (bcd.where.mdisp == lastdisplacement)
+					{
+						depth++;
+					}
+					else
+					{
+						lastdisplacement = bcd.where.mdisp;
+						depth = 0;
+					}
+					node->treeDepth = depth;
+					if (c->VTableOffset == node->where.mdisp && c->bInterface)
+					{
+						c->Name = node->Name;
+						c->MangledName = node->MangledName;
+					}
+					c->Parents.push_back(node);
+				}
+			}
 		}
 	}
 
 	void ProcessClasses64()
 	{
-		for(PotentialClass c : PotentialClassesFinal)
+		for (PotentialClass c : PotentialClassesFinal)
 		{
-			  RTTICompleteObjectLocator col;
-				process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
-				RTTIClassHierarchyDescriptor chd;
+			RTTICompleteObjectLocator col;
+			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+			RTTIClassHierarchyDescriptor chd;
 
-				uintptr_t pClassDescriptor = col.pClassDescriptor + moduleBase;
-				process->Read(pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
+			uintptr_t pClassDescriptor = col.pClassDescriptor + moduleBase;
+			process->Read(pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
 
-				uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
+			uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
 
-				_Class ValidClass;
-				ValidClass.CompleteObjectLocator = c.CompleteObjectLocator;
-				ValidClass.VTable = c.VTable;
-				char* name = (char*)malloc(256);
-				process->Read(pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, 256);
-				ValidClass.MangledName = name;
-				ValidClass.Name = DemangleMSVC(name);
-				FilterSymbol(ValidClass.Name);
-				ValidClass.offset = col.offset;
-				ValidClass.cdOffset = col.cdOffset;
+			_Class* ValidClass = new _Class();
+			ValidClass->CompleteObjectLocator = c.CompleteObjectLocator;
+			ValidClass->VTable = c.VTable;
+			char name[bufferSize];
+			memset(name, 0, bufferSize);
+			process->Read(pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, bufferSize);
+			name[bufferSize - 1] = 0;
+			ValidClass->MangledName = name;
+			ValidClass->Name = DemangleMSVC(name);
+			FilterSymbol(ValidClass->Name);
 
-				ValidClass.bMultipleInheritance  = (chd.attributes >> 0) & 1;
-				ValidClass.bVirtualInheritance  = (chd.attributes >> 1) & 1;
-				ValidClass.bAmbigious  = (chd.attributes >> 2) & 1;
+			ValidClass->VTableOffset = col.offset;
+			ValidClass->ConstructorDisplacementOffset = col.cdOffset;
+			ValidClass->numBaseClasses = chd.numBaseClasses;
 
-				if(ValidClass.MangledName[3] == 'U')
-				{
-					ValidClass.bStruct = true;
-				}
+			ValidClass->bMultipleInheritance = (chd.attributes >> 0) & 1;
+			ValidClass->bVirtualInheritance = (chd.attributes >> 1) & 1;
+			ValidClass->bAmbigious = (chd.attributes >> 2) & 1;
 
-				EnumerateVirtualFunctions(ValidClass);
-				Classes.push_back(ValidClass);
-				ClassMap.insert(std::pair<uintptr_t, _Class>(ValidClass.VTable, ValidClass));
-				free(name);
+			if (ValidClass->MangledName[3] == 'U')
+			{
+				ValidClass->bStruct = true;
+			}
+
+			EnumerateVirtualFunctions(ValidClass);
+			Classes.push_back(ValidClass);
+			ClassMap.insert(std::pair<uintptr_t, _Class*>(ValidClass->VTable, ValidClass));
 		}
+		PotentialClassesFinal.clear();
 	}
 
-	void EnumerateVirtualFunctions(_Class c)
+	void EnumerateVirtualFunctions(_Class* c)
 	{
-		c.functions.clear();
-		uintptr_t* buffer = (uintptr_t*)malloc(0x1000);
-		process->Read(c.VTable, buffer, 0x1000);
-		for (size_t i = 0; i < 0x1000 / sizeof(uintptr_t); i++)
+		constexpr int maxVFuncs = 0x4000;
+		static uintptr_t* buffer = new uintptr_t[maxVFuncs];
+		memset(buffer, 0, sizeof(uintptr_t) * maxVFuncs);
+		c->functions.clear();
+		process->Read(c->VTable, buffer, maxVFuncs);
+		for (size_t i = 0; i < maxVFuncs / sizeof(uintptr_t); i++)
 		{
-			if(buffer[i] == 0)
+			if (buffer[i] == 0)
 			{
 				break;
 			}
-			if(IsInExecutableSection(buffer[i]))
+			if (!IsInExecutableSection(buffer[i]))
 			{
-				c.functions.push_back(buffer[i]);
+				break;
 			}
+			c->functions.push_back(buffer[i]);
 		}
 	}
 
@@ -1107,67 +1238,63 @@ protected:
 		const std::string VTABLE_SYMBOL_PREFIX = "??_7";
 		const std::string VTABLE_SYMBOL_SUFFIX = "6B@";
 		char* pSymbol = nullptr;
-    if (*static_cast<char*>(symbol + 4) == '?') pSymbol = symbol + 1;
-    else if (*static_cast<char*>(symbol) == '.') pSymbol = symbol + 4;
-    else if (*static_cast<char*>(symbol) == '?') pSymbol = symbol + 2;
-    else
-    {
-        //report error
-        return std::string(symbol);
-    }
+		if (*static_cast<char*>(symbol + 4) == '?') pSymbol = symbol + 1;
+		else if (*static_cast<char*>(symbol) == '.') pSymbol = symbol + 4;
+		else if (*static_cast<char*>(symbol) == '?') pSymbol = symbol + 2;
+		else
+		{
+			//report error
+			return std::string(symbol);
+		}
 
-    std::string modifiedSymbol = pSymbol;
-    modifiedSymbol.insert(0, VTABLE_SYMBOL_PREFIX);
-    modifiedSymbol.insert(modifiedSymbol.size(), VTABLE_SYMBOL_SUFFIX);
-    char buff[0x1000];
-    std::memset(buff, 0, 0x1000);
-    if (!UnDecorateSymbolName(modifiedSymbol.c_str(), buff, 0x1000, 0))
-    {
-        //report error
-        return std::string(symbol);
-    }
+		std::string modifiedSymbol = pSymbol;
+		modifiedSymbol.insert(0, VTABLE_SYMBOL_PREFIX);
+		modifiedSymbol.insert(modifiedSymbol.size(), VTABLE_SYMBOL_SUFFIX);
+		char buff[bufferSize];
+		std::memset(buff, 0, bufferSize);
+		if (!UnDecorateSymbolName(modifiedSymbol.c_str(), buff, bufferSize, 0))
+		{
+			//report error
+			return std::string(symbol);
+		}
 
-    return std::string(buff);
+		return std::string(buff);
 	}
 
 	void SortClasses32()
 	{
 		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
-		{
-			char* aName = (char*)malloc(256);
-			char* bName = (char*)malloc(256);
-			RTTICompleteObjectLocator col1, col2;
-			process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
-			process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
-			process->Read((uintptr_t)col1.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), aName, 256);
-			process->Read((uintptr_t)col2.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), bName, 256);
-			std::string aNameStr = DemangleMSVC(aName);
-			std::string bNameStr = DemangleMSVC(bName);
-			free(aName);
-			free(bName);
-			return aNameStr < bNameStr;
-		});
+			{
+				char aName[bufferSize];
+				char bName[bufferSize];
+				RTTICompleteObjectLocator col1, col2;
+				process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
+				process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
+				process->Read((uintptr_t)col1.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), aName, bufferSize);
+				process->Read((uintptr_t)col2.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), bName, bufferSize);
+				std::string aNameStr = DemangleMSVC(aName);
+				std::string bNameStr = DemangleMSVC(bName);
+				return aNameStr < bNameStr;
+			});
 	}
 
-		void SortClasses64()
+	void SortClasses64()
 	{
 		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
-		{
-			char* aName = (char*)malloc(256);
-			char* bName = (char*)malloc(256);
-			RTTICompleteObjectLocator col1, col2;
-			process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
-			process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
-			uintptr_t pTypeDescriptor1 = (uintptr_t)col1.pTypeDescriptor + moduleBase;
-			uintptr_t pTypeDescriptor2 = (uintptr_t)col2.pTypeDescriptor + moduleBase;
-			process->Read(pTypeDescriptor1 + offsetof(RTTITypeDescriptor, name), aName, 256);
-			process->Read(pTypeDescriptor2 + offsetof(RTTITypeDescriptor, name), bName, 256);
-			std::string aNameStr = DemangleMSVC(aName);
-			std::string bNameStr = DemangleMSVC(bName);
-			free(aName);
-			free(bName);
-			return aNameStr < bNameStr;
-		});
+			{
+				char aName[bufferSize];
+				char bName[bufferSize];
+				RTTICompleteObjectLocator col1, col2;
+				process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
+				process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
+				uintptr_t pTypeDescriptor1 = (uintptr_t)col1.pTypeDescriptor + moduleBase;
+				uintptr_t pTypeDescriptor2 = (uintptr_t)col2.pTypeDescriptor + moduleBase;
+				process->Read(pTypeDescriptor1 + offsetof(RTTITypeDescriptor, name), aName, bufferSize);
+				process->Read(pTypeDescriptor2 + offsetof(RTTITypeDescriptor, name), bName, bufferSize);
+				std::string aNameStr = DemangleMSVC(aName);
+				std::string bNameStr = DemangleMSVC(bName);
+				return aNameStr < bNameStr;
+			});
 	}
 
 	inline static std::vector<std::string> filters =
@@ -1203,6 +1330,6 @@ protected:
 	std::vector<ModuleSection> ReadOnlySections;
 	std::vector<PotentialClass> PotentialClasses;
 	std::vector<PotentialClass> PotentialClassesFinal;
-	std::vector<_Class> Classes;
-	std::map<uintptr_t, _Class> ClassMap;
+	std::vector<_Class*> Classes;
+	std::map<uintptr_t, _Class*> ClassMap;
 };
