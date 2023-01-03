@@ -827,7 +827,9 @@ struct _Class
 	DWORD VTableOffset = 0;
 	DWORD ConstructorDisplacementOffset = 0;
 
-	std::vector<uintptr_t> functions;
+	std::vector<uintptr_t> Functions;
+	std::map<std::string, uintptr_t> FunctionMap; // map of guessed function names to addresses
+
 
 	DWORD numBaseClasses = 0;
 	std::vector<std::shared_ptr<_ParentClassNode>> Parents;
@@ -871,6 +873,7 @@ public:
 		}
 		else
 		{
+			// dont use the base address as 32 bits uses direct addresses instead of offsets
 			moduleBase = 0;
 		}
 		
@@ -1163,12 +1166,28 @@ protected:
 		}
 	}
 
+	std::string GuessFunctionName(uintptr_t Address)
+	{
+		std::string name = "";
+		unsigned char bytes[4];
+		process->Read(Address, bytes, 4);
+		if(bytes[0] == 0xC3 || bytes[0] == 0xC2)
+		{
+			name = std::format("nullsub_{:X}", Address);
+		}
+		else
+		{
+			name =  std::format("sub_{:X}", Address);
+		}
+		return name;
+	}
+
 	void EnumerateVirtualFunctions(std::shared_ptr<_Class> c)
 	{
 		constexpr int maxVFuncs = 0x4000;
 		auto buffer = std::make_unique<uintptr_t[]>(maxVFuncs);
 		memset(buffer.get(), 0, sizeof(uintptr_t) * maxVFuncs);
-		c->functions.clear();
+		c->Functions.clear();
 		process->Read(c->VTable, buffer.get(), maxVFuncs);
 		for (size_t i = 0; i < maxVFuncs / sizeof(uintptr_t); i++)
 		{
@@ -1180,22 +1199,28 @@ protected:
 			{
 				break;
 			}
-			c->functions.push_back(buffer[i]);
+			c->Functions.push_back(buffer[i]);
+		}
+
+		// process functions
+		for (uintptr_t i = 0; i < c->Functions.size(); i++)
+		{
+			c->FunctionMap.insert(std::pair<std::string, uintptr_t>(GuessFunctionName(c->Functions[i]), c->Functions[i]));
 		}
 	}
 
 
 	std::string DemangleMSVC(char* symbol)
 	{
-		const std::string VTABLE_SYMBOL_PREFIX = "??_7";
-		const std::string VTABLE_SYMBOL_SUFFIX = "6B@";
+		static const std::string VTABLE_SYMBOL_PREFIX = "??_7";
+		static const std::string VTABLE_SYMBOL_SUFFIX = "6B@";
 		char* pSymbol = nullptr;
 		if (*static_cast<char*>(symbol + 4) == '?') pSymbol = symbol + 1;
 		else if (*static_cast<char*>(symbol) == '.') pSymbol = symbol + 4;
 		else if (*static_cast<char*>(symbol) == '?') pSymbol = symbol + 2;
 		else
 		{
-			//report error
+			std::cout << "Unknown symbol format: " << symbol << std::endl;
 			return std::string(symbol);
 		}
 
@@ -1206,7 +1231,7 @@ protected:
 		std::memset(buff, 0, bufferSize);
 		if (!UnDecorateSymbolName(modifiedSymbol.c_str(), buff, bufferSize, 0))
 		{
-			//report error
+			std::cout << "UnDecorateSymbolName failed: " << GetLastError() << std::endl;
 			return std::string(symbol);
 		}
 
