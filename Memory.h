@@ -864,7 +864,16 @@ public:
 		this->process = process;
 		module = process->moduleMap.GetModule(moduleName);
 		this->moduleName = moduleName;
-		moduleBase = (uintptr_t)module->baseAddress;
+
+		if(process->Is64Bit())
+		{
+			moduleBase = (uintptr_t)module->baseAddress;
+		}
+		else
+		{
+			moduleBase = 0;
+		}
+		
 		FindValidSections();
 		ScanForClasses();
 		if (PotentialClasses.size() > 0)
@@ -884,7 +893,7 @@ public:
 
 	std::shared_ptr<_Class> FindFirst(std::string ClassName)
 	{
-		for (auto& c : Classes)
+		for (std::shared_ptr<_Class> c : Classes)
 		{
 			if (c->Name.find(ClassName) != std::string::npos)
 			{
@@ -897,7 +906,7 @@ public:
 	std::vector<std::shared_ptr<_Class>> FindAll(std::string ClassName)
 	{
 		std::vector<std::shared_ptr<_Class>> classes;
-		for (auto& c : Classes)
+		for (std::shared_ptr<_Class> c : Classes)
 		{
 			if (c->Name.find(ClassName) != std::string::npos)
 			{
@@ -1007,6 +1016,14 @@ protected:
 				{
 					continue;
 				}
+			}
+			else
+			{
+				if (col.signature != 0)
+				{
+					continue;
+				}
+			}
 
 				uintptr_t pTypeDescriptor = col.pTypeDescriptor + moduleBase;
 
@@ -1024,163 +1041,18 @@ protected:
 				}
 
 				PotentialClassesFinal.push_back(c);
-
 			}
-			else
-			{
-				if (col.signature != 0)
-				{
-					continue;
-				}
-
-				if (!IsInReadOnlySection(col.pTypeDescriptor))
-				{
-					continue;
-				}
-
-				RTTITypeDescriptor td;
-				process->Read(col.pTypeDescriptor, &td, sizeof(RTTITypeDescriptor));
-				if (!IsInReadOnlySection(td.pVFTable))
-				{
-					continue;
-				}
-
-				PotentialClassesFinal.push_back(c);
-			}
-		}
 
 		PotentialClasses.clear();
 		PotentialClasses.shrink_to_fit();
-		if (bUse64bit)
-		{
-			SortClasses64();
-			ProcessClasses64();
-		}
-		else
-		{
-			SortClasses32();
-			ProcessClasses32();
-		}
+		SortClasses();
+		ProcessClasses();
 
 
 		std::cout << "Found " << Classes.size() << " valid classes in " << moduleName << std::endl;
 	}
 
-	void ProcessClasses32()
-	{
-		std::shared_ptr<_Class> lastClass = nullptr;
-		for (PotentialClass c : PotentialClassesFinal)
-		{
-			RTTICompleteObjectLocator col;
-			process->Read(c.CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
-			RTTIClassHierarchyDescriptor chd;
-			process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
-			std::shared_ptr<_Class> ValidClass = std::make_shared<_Class>();
-			ValidClass->CompleteObjectLocator = c.CompleteObjectLocator;
-			ValidClass->VTable = c.VTable;
-
-			char name[bufferSize];
-			process->Read((uintptr_t)col.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, bufferSize);
-			ValidClass->MangledName = name;
-			ValidClass->Name = DemangleMSVC(name);
-			FilterSymbol(ValidClass->Name);
-
-			ValidClass->VTableOffset = col.offset;
-			ValidClass->ConstructorDisplacementOffset = col.cdOffset;
-			ValidClass->numBaseClasses = chd.numBaseClasses;
-
-			ValidClass->bMultipleInheritance = (chd.attributes >> 0) & 1;
-			ValidClass->bVirtualInheritance = (chd.attributes >> 1) & 1;
-			ValidClass->bAmbigious = (chd.attributes >> 2) & 1;
-
-			if (lastClass != nullptr)
-			{
-				if (lastClass->Name == ValidClass->Name)
-				{
-					ValidClass->bInterface = true;
-				}
-			}
-
-			if (ValidClass->MangledName[3] == 'U')
-			{
-				ValidClass->bStruct = true;
-			}
-			EnumerateVirtualFunctions(ValidClass);
-			Classes.push_back(ValidClass);
-			ClassMap.insert(std::pair<uintptr_t, std::shared_ptr<_Class>>(ValidClass->VTable, ValidClass));
-
-			if (!ValidClass->bInterface)
-			{
-				lastClass = Classes.back();
-			}
-			else if (lastClass != nullptr)
-			{
-				lastClass->Interfaces.push_back(ValidClass);
-			}
-		}
-		PotentialClassesFinal.clear();
-		PotentialClassesFinal.shrink_to_fit();
-
-		// process super classes
-		for (std::shared_ptr<_Class> c : Classes)
-		{
-			if (c->numBaseClasses > 1)
-			{
-				// read class array (skip the first one)
-				std::unique_ptr<DWORD[]> baseClassArray = std::make_unique<DWORD[]>(0x4000);
-
-				RTTICompleteObjectLocator col;
-				process->Read(c->CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
-
-				RTTIClassHierarchyDescriptor chd;
-				process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
-				process->Read(chd.pBaseClassArray, baseClassArray.get(), sizeof(uintptr_t) * c->numBaseClasses - 1);
-
-				DWORD lastdisplacement = 0;
-				DWORD depth = 0;
-
-				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
-				{
-					RTTIBaseClassDescriptor bcd;
-					std::shared_ptr<_ParentClassNode> node = std::make_shared<_ParentClassNode>();
-					process->Read(baseClassArray[i], &bcd, sizeof(RTTIBaseClassDescriptor));
-
-					// process child name
-					char name[bufferSize];
-					process->Read((uintptr_t)bcd.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), name, bufferSize);
-					name[bufferSize - 1] = 0;
-					node->MangledName = name;
-					node->Name = DemangleMSVC(name);
-					node->attributes = bcd.attributes;
-					FilterSymbol(node->Name);
-
-					node->ChildClass = c;
-					node->Class = FindFirst(node->Name);
-					node->numContainedBases = bcd.numContainedBases;
-					node->where = bcd.where;
-
-					if (bcd.where.mdisp == lastdisplacement)
-					{
-						depth++;
-					}
-					else
-					{
-						lastdisplacement = bcd.where.mdisp;
-						depth = 0;
-					}
-					node->treeDepth = depth;
-					if (c->VTableOffset == node->where.mdisp && c->bInterface)
-					{
-						c->Name = node->Name;
-						c->MangledName = node->MangledName;
-					}
-					c->Parents.push_back(node);
-				}
-			}
-		}
-	}
-
-	void ProcessClasses64()
+	void ProcessClasses()
 	{
 		for (PotentialClass c : PotentialClassesFinal)
 		{
@@ -1341,24 +1213,7 @@ protected:
 		return std::string(buff);
 	}
 
-	void SortClasses32()
-	{
-		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
-			{
-				char aName[bufferSize];
-				char bName[bufferSize];
-				RTTICompleteObjectLocator col1, col2;
-				process->Read(a.CompleteObjectLocator, &col1, sizeof(RTTICompleteObjectLocator));
-				process->Read(b.CompleteObjectLocator, &col2, sizeof(RTTICompleteObjectLocator));
-				process->Read((uintptr_t)col1.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), aName, bufferSize);
-				process->Read((uintptr_t)col2.pTypeDescriptor + offsetof(RTTITypeDescriptor, name), bName, bufferSize);
-				std::string aNameStr = DemangleMSVC(aName);
-				std::string bNameStr = DemangleMSVC(bName);
-				return aNameStr < bNameStr;
-			});
-	}
-
-	void SortClasses64()
+	void SortClasses()
 	{
 		std::sort(PotentialClassesFinal.begin(), PotentialClassesFinal.end(), [=](PotentialClass a, PotentialClass b)
 			{
