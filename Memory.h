@@ -123,7 +123,15 @@ struct Process
 	{
 		BOOL bIsWow64 = FALSE;
 		typedef BOOL(WINAPI* LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
-		LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
+		HMODULE Kernel32 = GetModuleHandle(TEXT("kernel32"));
+
+		if (Kernel32 == NULL)
+		{
+			std::cout << "Failed to get kernel32" << std::endl;
+			exit(0);
+		}
+
+		LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress((Kernel32), "IsWow64Process");
 		if (fnIsWow64Process != nullptr)
 		{
 			fnIsWow64Process(this->hProcess, &bIsWow64);
@@ -215,10 +223,10 @@ struct MemoryMap
 
 struct ModuleSection
 {
-	uintptr_t start;
-	uintptr_t end;
-	bool bFlagReadonly;
-	bool bFlagExecutable;
+	uintptr_t start = 0;
+	uintptr_t end = 0;
+	bool bFlagReadonly = false;
+	bool bFlagExecutable = false;
 	std::string name;
 
 	bool contains(uintptr_t address)
@@ -234,7 +242,7 @@ struct ModuleSection
 
 struct Module
 {
-	void* baseAddress;
+	void* baseAddress = nullptr;
 	std::vector<ModuleSection> sections;
 	std::string name;
 };
@@ -592,7 +600,7 @@ class RemotePointer
 {
 public:
 
-	RemotePointer()
+	RemotePointer() : process(nullptr), address(0)
 	{
 
 	}
@@ -756,72 +764,72 @@ private:
 
 struct PMD
 {
-	int mdisp; // member displacement
-	int pdisp; // vbtable displacement
-	int vdisp; // displacement inside vbtable
+	int mdisp = 0; // member displacement
+	int pdisp = 0; // vbtable displacement
+	int vdisp = 0; // displacement inside vbtable
 };
 
 struct RTTIBaseClassDescriptor
 {
-	DWORD pTypeDescriptor; // type descriptor of the class
-	DWORD numContainedBases; // number of nested classes in BaseClassArray
+	DWORD pTypeDescriptor = 0; // type descriptor of the class
+	DWORD numContainedBases = 0; // number of nested classes in BaseClassArray
 	PMD where; // pointer to member displacement info
-	DWORD attributes; // flags, usually 0
+	DWORD attributes = 0; // flags, usually 0
 };
 
 struct RTTIBaseClassArray
 {
 	// 0x4000 is the maximum number of inheritance allowed in some standards, but it will never exceed that lol ;)
 	// Did this to avoid using C99 Variable Length Arrays, its not in the C++ standard
-	DWORD arrayOfBaseClassDescriptors; // describes base classes for the complete class
+	DWORD arrayOfBaseClassDescriptors = 0; // describes base classes for the complete class
 };
 
 struct RTTIClassHierarchyDescriptor
 {
-	DWORD signature; // 1 if 64 bit, 0 if 32bit
-	DWORD attributes; // bit 0 set = multiple inheritance, bit 1 set = virtual inheritance, bit 2 set = ambiguous
-	DWORD numBaseClasses; // number of classes in the BaseClassArray
-	DWORD pBaseClassArray; // array of base class descriptors
+	DWORD signature = 0; // 1 if 64 bit, 0 if 32bit
+	DWORD attributes = 0; // bit 0 set = multiple inheritance, bit 1 set = virtual inheritance, bit 2 set = ambiguous
+	DWORD numBaseClasses = 0; // number of classes in the BaseClassArray
+	DWORD pBaseClassArray = 0; // array of base class descriptors
 };
 
 struct RTTICompleteObjectLocator
 {
-	DWORD signature; // 1 if 64 bit, 0 if 32bit
-	DWORD offset; // offset of this vtable in the complete class
-	DWORD cdOffset; // constructor displacement offset
-	DWORD pTypeDescriptor; // type descriptor of the complete class
-	DWORD pClassDescriptor; // class descriptor for the complete class
+	DWORD signature = 0; // 1 if 64 bit, 0 if 32bit
+	DWORD offset = 0; // offset of this vtable in the complete class
+	DWORD cdOffset = 0; // constructor displacement offset
+	DWORD pTypeDescriptor = 0; // type descriptor of the complete class
+	DWORD pClassDescriptor = 0; // class descriptor for the complete class
 };
 
 struct RTTITypeDescriptor
 {
-	uintptr_t pVFTable; // pointer to the vftable
-	uintptr_t spare;
-	char name; // name of the class
+	uintptr_t pVFTable = 0; // pointer to the vftable
+	uintptr_t spare = 0;
+	char name = 0; // name of the class
 };
 
 
 struct PotentialClass
 {
-	uintptr_t CompleteObjectLocator;
-	uintptr_t VTable;
+	uintptr_t CompleteObjectLocator = 0;
+	uintptr_t VTable = 0;
 };
 
 struct _ParentClassNode;
 struct _Class
 {
-	uintptr_t CompleteObjectLocator;
-	uintptr_t VTable;
+	uintptr_t CompleteObjectLocator = 0;
+	uintptr_t VTable = 0;
 
 	std::string Name;
 	std::string MangledName;
 
-	DWORD VTableOffset;
-	DWORD ConstructorDisplacementOffset;
+	DWORD VTableOffset = 0;
+	DWORD ConstructorDisplacementOffset = 0;
 
 	std::vector<uintptr_t> functions;
 
-	DWORD numBaseClasses;
+	DWORD numBaseClasses = 0;
 	std::vector<_ParentClassNode*> Parents;
 	std::vector<_Class*> Interfaces;
 
@@ -837,15 +845,15 @@ struct _ParentClassNode
 	// basic class info
 	std::string Name;
 	std::string MangledName;
-	DWORD numContainedBases;
-	PMD where;
-	DWORD attributes;
+	DWORD numContainedBases = 0;
+	PMD where = { 0,0,0 };
+	DWORD attributes = 0;
 	// lowest child class (the root of the tree)
-	_Class* ChildClass;
+	_Class* ChildClass = nullptr;
 	// base class of this class (found by looking for class of the same name)
-	_Class* Class;
+	_Class* Class = nullptr;
 	// depth of the class in the tree
-	DWORD treeDepth;
+	DWORD treeDepth = 0;
 };
 
 class RTTI
@@ -956,8 +964,13 @@ protected:
 		for (auto& section : ReadOnlySections)
 		{
 			buffer = (uintptr_t*)malloc(section.size());
+			if (buffer == nullptr)
+			{
+				std::cout << "Out of memory: line" << __LINE__;
+				exit(0);
+			}
 			process->Read(section.start, buffer, section.size());
-			unsigned int max = section.size() / sizeof(uintptr_t);
+			uintptr_t max = section.size() / sizeof(uintptr_t);
 			for (size_t i = 0; i < max; i++)
 			{
 				if (buffer[i] == 0 || i + 1 > max)
@@ -1114,14 +1127,14 @@ protected:
 			if (c->numBaseClasses > 1)
 			{
 				// read class array (skip the first one)
-				uintptr_t baseClassArray[0x4000];
+				std::unique_ptr<DWORD[]> baseClassArray = std::make_unique<DWORD[]>(0x4000);
 
 				RTTICompleteObjectLocator col;
 				process->Read(c->CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
 
 				RTTIClassHierarchyDescriptor chd;
 				process->Read(col.pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
-				process->Read(chd.pBaseClassArray, baseClassArray, sizeof(uintptr_t) * c->numBaseClasses - 1);
+				process->Read(chd.pBaseClassArray, baseClassArray.get(), sizeof(uintptr_t) * c->numBaseClasses - 1);
 
 				DWORD lastdisplacement = 0;
 				DWORD depth = 0;
@@ -1209,6 +1222,73 @@ protected:
 			ClassMap.insert(std::pair<uintptr_t, _Class*>(ValidClass->VTable, ValidClass));
 		}
 		PotentialClassesFinal.clear();
+		PotentialClassesFinal.shrink_to_fit();
+
+		// process super classes
+		for (_Class* c : Classes)
+		{
+			if (c->numBaseClasses > 1)
+			{
+				// read class array (skip the first one)
+				std::unique_ptr<DWORD[]> baseClassArray = std::make_unique<DWORD[]>(0x4000);
+				std::vector<uintptr_t> baseClasses;
+				baseClasses.reserve(c->numBaseClasses);
+				RTTICompleteObjectLocator col;
+				process->Read(c->CompleteObjectLocator, &col, sizeof(RTTICompleteObjectLocator));
+
+				RTTIClassHierarchyDescriptor chd;
+				uintptr_t pClassDescriptor = col.pClassDescriptor + moduleBase;
+				process->Read(pClassDescriptor, &chd, sizeof(RTTIClassHierarchyDescriptor));
+				uintptr_t pBaseClassArray = chd.pBaseClassArray + moduleBase;
+				process->Read(pBaseClassArray, baseClassArray.get(), sizeof(uintptr_t) * c->numBaseClasses - 1);
+
+				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
+				{
+					baseClasses.push_back(baseClassArray[i] + moduleBase);
+				}
+
+				DWORD lastdisplacement = 0;
+				DWORD depth = 0;
+
+				for (unsigned int i = 0; i < c->numBaseClasses - 1; i++)
+				{
+					RTTIBaseClassDescriptor bcd;
+					_ParentClassNode* node = new _ParentClassNode;
+					process->Read(baseClasses[i], &bcd, sizeof(RTTIBaseClassDescriptor));
+
+					// process child name
+					char name[bufferSize];
+					process->Read((uintptr_t)bcd.pTypeDescriptor + moduleBase + offsetof(RTTITypeDescriptor, name), name, bufferSize);
+					name[bufferSize - 1] = 0;
+					node->MangledName = name;
+					node->Name = DemangleMSVC(name);
+					node->attributes = bcd.attributes;
+					FilterSymbol(node->Name);
+
+					node->ChildClass = c;
+					node->Class = FindFirst(node->Name);
+					node->numContainedBases = bcd.numContainedBases;
+					node->where = bcd.where;
+
+					if (bcd.where.mdisp == lastdisplacement)
+					{
+						depth++;
+					}
+					else
+					{
+						lastdisplacement = bcd.where.mdisp;
+						depth = 0;
+					}
+					node->treeDepth = depth;
+					if (c->VTableOffset == node->where.mdisp && c->bInterface)
+					{
+						c->Name = node->Name;
+						c->MangledName = node->MangledName;
+					}
+					c->Parents.push_back(node);
+				}
+			}
+		}
 	}
 
 	void EnumerateVirtualFunctions(_Class* c)
