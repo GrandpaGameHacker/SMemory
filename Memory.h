@@ -1,9 +1,13 @@
 // windows
 #include <Windows.h>
+#include <winternl.h>
 #include <tlhelp32.h>
-
+#include <DbgHelp.h>
 #include <psapi.h>
+
+#pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "psapi.lib")
+#pragma comment(lib,"dbghelp.lib")
 
 #include <thread>
 #include <atomic>
@@ -14,19 +18,102 @@
 #include <string>
 #include <future>
 #include <map>
-
-#include <DbgHelp.h>
-#pragma comment(lib,"dbghelp.lib")
-
 #include <algorithm>
 
 constexpr int bufferSize = 0x1000;
+
+struct ProcessListItem
+{
+	DWORD pid;
+	std::string name;
+};
+
+std::vector<ProcessListItem> GetProcessList()
+{
+	std::vector<ProcessListItem> list;
+
+	HANDLE hProcessSnap;
+	PROCESSENTRY32 pe32;
+
+	hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (hProcessSnap == INVALID_HANDLE_VALUE)
+	{
+		return list;
+	}
+
+	pe32.dwSize = sizeof(PROCESSENTRY32);
+
+	if (!Process32First(hProcessSnap, &pe32))
+	{
+		CloseHandle(hProcessSnap);
+		return list;
+	}
+
+	do
+	{
+		ProcessListItem item;
+		item.pid = pe32.th32ProcessID;
+		item.name = pe32.szExeFile;
+		list.push_back(item);
+	} while (Process32Next(hProcessSnap, &pe32));
+
+	CloseHandle(hProcessSnap);
+	return list;
+}
+
+float ShannonEntropyBlock(const void* data, size_t size)
+{
+	const char* block = (const char*) data;
+	std::map<char, int> freq;
+	for (size_t i = 0; i < size; i++)
+	{
+		freq[block[i]]++;
+	}
+
+	float entropy = 0;
+	for (auto& it : freq)
+	{
+		float p = (float)it.second / size;
+		entropy += p * log2(p);
+	}
+
+	return -entropy;
+}
+
+bool IsBlockHighEntropy(const void* data, size_t size, float threshold)
+{
+	return ShannonEntropyBlock(data, size) > threshold;
+}
+
+
+
+void GetDebugPrivilege()
+{
+	HANDLE hToken;
+	LUID sedebugnameValue;
+	TOKEN_PRIVILEGES tkp;
+
+	OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
+	LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &sedebugnameValue);
+
+	tkp.PrivilegeCount = 1;
+	tkp.Privileges[0].Luid = sedebugnameValue;
+	tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+	AdjustTokenPrivileges(hToken, FALSE, &tkp, sizeof tkp, NULL, NULL);
+}
+
+
 
 struct Process
 {
 	HANDLE hProcess;
 	DWORD dwProcessID;
 	std::string ProcessName;
+
+	DEBUG_EVENT debugEvent;
+	bool bIsDebugActive = false;
+	CONTEXT debugActiveContext;
 
 	Process(DWORD dwProcessID)
 	{
@@ -148,6 +235,45 @@ struct Process
 		bool b64Local = sizeof(void*) == 8;
 		return b64Remote == b64Local;
 	}
+
+	bool AttachDebugger()
+	{
+		return DebugActiveProcess(this->dwProcessID);
+	}
+
+	bool DetachDebugger()
+	{
+		return DebugActiveProcessStop(this->dwProcessID);
+	}
+
+	bool DebugWait()
+	{
+		return WaitForDebugEvent(&this->debugEvent, INFINITE);
+	}
+
+	bool DebugContinue(DWORD dwContinueStatus)
+	{
+		return ContinueDebugEvent(this->debugEvent.dwProcessId, this->debugEvent.dwThreadId, dwContinueStatus);
+	}
+
+	void* AllocRW(size_t size)
+	{
+		return VirtualAllocEx(this->hProcess, NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	}
+
+	void* AllocRWX(size_t size)
+	{
+		return VirtualAllocEx(this->hProcess, NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	}
+
+	bool Free(void* Address)
+	{
+		return VirtualFreeEx(this->hProcess, Address, 0, MEM_RELEASE);
+	}
+
+
+
+
 
 private:
 	void CheckBits()
@@ -359,6 +485,8 @@ struct TargetProcess
 		moduleMap.Setup(&process);
 	}
 
+	/*********** Process Utils ***********/
+
 	bool Is64Bit()
 	{
 		return !process.Is32Bit();
@@ -465,6 +593,59 @@ struct TargetProcess
 		}
 		return nullptr;
 	}
+
+	DWORD SetProtection(uintptr_t address, size_t size, DWORD protection)
+	{
+		DWORD oldProtection;
+		VirtualProtectEx(process.hProcess, (void*)address, size, protection, &oldProtection);
+		return oldProtection;
+	}
+
+	
+	/*********** Window Utils ***********/
+
+
+	std::vector<HWND> GetWindows()
+	{
+		std::vector<HWND> windowsTemp;
+		std::vector<HWND> windowsFinal;
+		EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
+			{
+				((std::vector<HWND>*)lParam)->push_back(hwnd);
+				return TRUE;
+			}, (LPARAM)&windowsTemp);
+
+		for (auto& window : windowsTemp)
+		{
+			DWORD processID;
+			GetWindowThreadProcessId(window, &processID);
+			if (processID == process.dwProcessID)
+			{
+				windowsFinal.push_back(window);
+			}
+		}
+
+		return windowsFinal;
+	}
+
+	std::string GetWindowName(HWND window)
+	{
+		char buffer[256];
+		GetWindowTextA(window, buffer, 256);
+		return std::string(buffer);
+	}
+
+	bool SetWindowName(HWND window, const std::string& name)
+	{
+		return SetWindowTextA(window, name.c_str());
+	}
+
+	bool SetTransparency(HWND window, BYTE alpha)
+	{
+		return SetLayeredWindowAttributes(window, 0, alpha, LWA_ALPHA);
+	}
+
+	/*********** Memory Utils ***********/
 
 	void Read(uintptr_t address, void* buffer, size_t size)
 	{
@@ -828,7 +1009,7 @@ struct _Class
 	DWORD ConstructorDisplacementOffset = 0;
 
 	std::vector<uintptr_t> Functions;
-	std::map<std::string, uintptr_t> FunctionMap; // map of guessed function names to addresses
+	std::map<uintptr_t, std::string> FunctionNames; // map of function names to addresses
 
 
 	DWORD numBaseClasses = 0;
@@ -857,6 +1038,12 @@ struct _ParentClassNode
 	// depth of the class in the tree
 	DWORD treeDepth = 0;
 };
+
+/************************************************************************/
+/* RTTI Scanner class to get RTTI info from a process                   */
+/* Results are in a queryable API									    */
+/* Only supports MSVC virtual inheritance / symbol demangling			*/
+/************************************************************************/
 
 class RTTI
 {
@@ -917,6 +1104,11 @@ public:
 			}
 		}
 		return classes;
+	}
+
+	std::vector<std::shared_ptr<_Class>> GetClasses()
+	{
+		return Classes;
 	}
 
 protected:
@@ -1057,6 +1249,8 @@ protected:
 
 	void ProcessClasses()
 	{
+		std::string LastClassName = "";
+		std::shared_ptr<_Class> LastClass = nullptr;
 		for (PotentialClass c : PotentialClassesFinal)
 		{
 			RTTICompleteObjectLocator col;
@@ -1079,6 +1273,7 @@ protected:
 			ValidClass->Name = DemangleMSVC(name);
 			FilterSymbol(ValidClass->Name);
 
+
 			ValidClass->VTableOffset = col.offset;
 			ValidClass->ConstructorDisplacementOffset = col.cdOffset;
 			ValidClass->numBaseClasses = chd.numBaseClasses;
@@ -1092,6 +1287,17 @@ protected:
 				ValidClass->bStruct = true;
 			}
 
+			if(ValidClass->Name == LastClassName && ValidClass->bMultipleInheritance)
+			{
+				ValidClass->bInterface = true;
+				LastClass->Interfaces.push_back(ValidClass);
+			}
+			else
+			{
+				LastClassName = ValidClass->Name;
+				LastClass = ValidClass;
+			}
+
 			EnumerateVirtualFunctions(ValidClass);
 			Classes.push_back(ValidClass);
 			ClassMap.insert(std::pair<uintptr_t, std::shared_ptr<_Class>>(ValidClass->VTable, ValidClass));
@@ -1100,6 +1306,7 @@ protected:
 		PotentialClassesFinal.shrink_to_fit();
 
 		// process super classes
+		int interfaceCount = 0;
 		for (std::shared_ptr<_Class> c : Classes)
 		{
 			if (c->numBaseClasses > 1)
@@ -1166,22 +1373,6 @@ protected:
 		}
 	}
 
-	std::string GuessFunctionName(uintptr_t Address)
-	{
-		std::string name = "";
-		unsigned char bytes[4];
-		process->Read(Address, bytes, 4);
-		if(bytes[0] == 0xC3 || bytes[0] == 0xC2)
-		{
-			name = std::format("nullsub_{:X}", Address);
-		}
-		else
-		{
-			name =  std::format("sub_{:X}", Address);
-		}
-		return name;
-	}
-
 	void EnumerateVirtualFunctions(std::shared_ptr<_Class> c)
 	{
 		constexpr int maxVFuncs = 0x4000;
@@ -1200,12 +1391,6 @@ protected:
 				break;
 			}
 			c->Functions.push_back(buffer[i]);
-		}
-
-		// process functions
-		for (uintptr_t i = 0; i < c->Functions.size(); i++)
-		{
-			c->FunctionMap.insert(std::pair<std::string, uintptr_t>(GuessFunctionName(c->Functions[i]), c->Functions[i]));
 		}
 	}
 
